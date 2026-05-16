@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>IELTS Road Blitz</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800;900&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ══════════════════════════════════
+       SCREEN 1 — START
+  ══════════════════════════════════ -->
+  <div id="screen-start" class="screen active">
+    <div class="start-inner">
+
+      <div class="start-logo">
+        <div class="logo-tag">IELTS</div>
+        <h1 class="logo-title">Road<br/>Blitz</h1>
+        <p class="logo-sub">Part 2 Speaking — Vocabulary Driver</p>
+      </div>
+
+      <div class="start-card">
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <span class="setting-icon">⚡</span> Speed
+          </div>
+          <div class="speed-btns">
+            <button class="spd active" data-speed="slow">Cruising</button>
+            <button class="spd" data-speed="medium">Highway</button>
+            <button class="spd" data-speed="fast">Redline</button>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <span class="setting-icon">🗣️</span> Voice
+          </div>
+          <div class="voice-row">
+            <select id="voice-select" class="voice-select">
+              <option>Loading...</option>
+            </select>
+            <button id="voice-test-btn" class="voice-test-btn">▶</button>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <span class="setting-icon">📱</span> Tilt steering
+          </div>
+          <button id="tilt-btn" class="tilt-btn">Enable tilt</button>
+        </div>
+
+      </div>
+
+      <div class="progress-row">
+        <div class="prog-pill">
+          <span class="prog-n" id="prog-done">0</span>
+          <span class="prog-l">/ 25 topics done</span>
+        </div>
+        <button class="reset-btn" id="reset-btn">Reset</button>
+      </div>
+
+      <button class="btn-go" id="btn-start">
+        Start engine →
+      </button>
+
+    </div>
+  </div>
+
+
+  <!-- ══════════════════════════════════
+       SCREEN 2 — TOPIC CUE CARD
+  ══════════════════════════════════ -->
+  <div id="screen-topic" class="screen">
+    <div class="topic-inner">
+
+      <div class="topic-meta">
+        <div class="topic-chip" id="topic-chip">Topic 1 of 25</div>
+        <div class="topic-dots" id="topic-dots"></div>
+      </div>
+
+      <div class="cue-card">
+        <div class="cue-title" id="cue-title">Perfect Job</div>
+        <div class="cue-body"  id="cue-body"></div>
+      </div>
+
+      <p class="topic-hint">
+        Study the topic. On the road, <strong>ram the car</strong> with the word that fits — avoid the distractor.
+      </p>
+
+      <button class="btn-ready" id="btn-ready">
+        Hit the road →
+      </button>
+
+    </div>
+  </div>
+
+
+  <!-- ══════════════════════════════════
+       SCREEN 3 — GAME (CANVAS)
+  ══════════════════════════════════ -->
+  <div id="screen-game" class="screen">
+
+    <div class="game-hud">
+      <div class="hud-block">
+        <div class="hud-label">Score</div>
+        <div class="hud-val" id="hud-score">0</div>
+      </div>
+      <div class="hud-block hud-center">
+        <div class="topic-pill" id="hud-topic">Perfect Job</div>
+        <div class="streak-row">
+          <span class="streak-fire" id="streak-fire">✦</span>
+          <span class="streak-n"   id="streak-num">0</span>
+          <span class="streak-lbl">streak</span>
+        </div>
+      </div>
+      <div class="hud-block hud-right">
+        <div class="hud-label">Left</div>
+        <div class="hud-val" id="hud-left">10</div>
+      </div>
+    </div>
+
+    <canvas id="game-canvas"></canvas>
+
+    <div class="tilt-hint" id="tilt-hint">Tilt to steer</div>
+
+  </div>
+
+
+  <!-- ══════════════════════════════════
+       SCREEN 4 — REVIEW
+  ══════════════════════════════════ -->
+  <div id="screen-review" class="screen">
+    <div class="review-inner">
+
+      <div class="review-top">
+        <div>
+          <div class="review-score" id="review-score">8/10</div>
+          <div class="review-label">Round complete!</div>
+        </div>
+        <div class="review-stars" id="review-stars">★★★</div>
+      </div>
+
+      <div class="review-topic" id="review-topic">Perfect Job</div>
+      <div class="review-list"  id="review-list"></div>
+
+      <div class="review-btns">
+        <button class="btn-next" id="btn-next">Next topic →</button>
+        <button class="btn-home" id="btn-home">← Home</button>
+      </div>
+
+    </div>
+  </div>
+
+
+  <!-- ══════════════════════════════════
+       SCREEN 5 — ALL DONE
+  ══════════════════════════════════ -->
+  <div id="screen-done" class="screen">
+    <div class="done-inner">
+      <div class="done-icon">🏁</div>
+      <h2 class="done-title">All 25 topics complete!</h2>
+      <p class="done-sub">You've driven through every topic. Vocabulary unlocked.</p>
+      <div class="done-score" id="done-score">Total score: 0</div>
+      <button class="btn-go" id="btn-again">Drive again →</button>
+    </div>
+  </div>
+
+  <script src="questions.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
