@@ -1,15 +1,12 @@
 /* ═══════════════════════════════════════════════════
-   IELTS Road Blitz — game.js
-   Canvas driving game: tilt steering, enemy cars,
-   collision detection, particles, speech, review.
+   IELTS Road Blitz — game.js  (v2)
+   Fixes: desktop buttons, landscape, larger word font,
+   audio plays AFTER collision, engine sound, crash sound,
+   word repeat fix, high scores.
 ═══════════════════════════════════════════════════ */
 
-/* ── Speed presets (px/frame at 60fps) ── */
-const SPEEDS = {
-  slow:   2.2,
-  medium: 3.6,
-  fast:   5.2,
-};
+/* ── Speed presets ── */
+const SPEEDS = { slow: 2.2, medium: 3.6, fast: 5.2 };
 
 /* ── State ── */
 const state = {
@@ -24,20 +21,144 @@ const state = {
   roundResults:  [],
   selectedVoice: null,
   tiltEnabled:   false,
-  tiltGamma:     0,       // device tilt left/right (-90 to 90)
+  tiltGamma:     0,
   running:       false,
   animFrame:     null,
+  steerLeft:     false,   // on-screen / keyboard left held
+  steerRight:    false,   // on-screen / keyboard right held
+  usedPairWords: new Set(), // tracks words used as pairs to prevent repetition
 };
 
-/* ── Canvas & ctx ── */
+/* ── Audio context (created on first user gesture) ── */
+let audioCtx      = null;
+let engineNode    = null;
+let engineGain    = null;
+
+function getAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+
+/* ── Engine rumble ── */
+function startEngine() {
+  try {
+    const ctx = getAudioCtx();
+    if (engineNode) { engineNode.stop(); engineNode = null; }
+
+    // Layered oscillators for engine rumble
+    engineGain        = ctx.createGain();
+    engineGain.gain.setValueAtTime(0.0, ctx.currentTime);
+    engineGain.gain.linearRampToValueAtTime(0.18, ctx.currentTime + 1.2);
+    engineGain.connect(ctx.destination);
+
+    const freqs = [55, 110, 165];
+    freqs.forEach(f => {
+      const osc  = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type   = 'sawtooth';
+      osc.frequency.setValueAtTime(f, ctx.currentTime);
+      gain.gain.setValueAtTime(0.06, ctx.currentTime);
+      osc.connect(gain);
+      gain.connect(engineGain);
+      osc.start();
+      // keep reference to first one for stop
+      if (f === 55) engineNode = osc;
+      else osc; // others run until context stops
+    });
+  } catch (e) { /* audio not supported */ }
+}
+
+function stopEngine() {
+  try {
+    if (engineGain) {
+      engineGain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.5);
+    }
+  } catch {}
+}
+
+/* ── Crash sound ── */
+function playCrash(isCorrect) {
+  try {
+    const ctx  = getAudioCtx();
+    const gain = ctx.createGain();
+    gain.connect(ctx.destination);
+
+    if (isCorrect) {
+      // Satisfying crunch + success tone
+      const buf  = ctx.createBuffer(1, ctx.sampleRate * 0.15, ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < data.length; i++) {
+        data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / data.length, 0.8);
+      }
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      gain.gain.setValueAtTime(0.4, ctx.currentTime);
+      src.connect(gain);
+      src.start();
+
+      // Success ding
+      const osc = ctx.createOscillator();
+      const og  = ctx.createGain();
+      osc.type  = 'sine';
+      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.1);
+      osc.frequency.linearRampToValueAtTime(1200, ctx.currentTime + 0.25);
+      og.gain.setValueAtTime(0.3, ctx.currentTime + 0.1);
+      og.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.35);
+      osc.connect(og); og.connect(ctx.destination);
+      osc.start(ctx.currentTime + 0.1);
+      osc.stop(ctx.currentTime + 0.35);
+    } else {
+      // Wrong buzz
+      const osc = ctx.createOscillator();
+      const og  = ctx.createGain();
+      osc.type  = 'square';
+      osc.frequency.setValueAtTime(140, ctx.currentTime);
+      osc.frequency.linearRampToValueAtTime(60, ctx.currentTime + 0.3);
+      og.gain.setValueAtTime(0.35, ctx.currentTime);
+      og.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.3);
+      osc.connect(og); og.connect(ctx.destination);
+      osc.start(); osc.stop(ctx.currentTime + 0.3);
+    }
+  } catch {}
+}
+
+/* ── Speech ── */
+function speak(word) {
+  if (!window.speechSynthesis) return;
+  window.speechSynthesis.cancel();
+  const u   = new SpeechSynthesisUtterance(word);
+  u.rate    = 0.88;
+  u.pitch   = 1;
+  u.volume  = 1;
+  if (state.selectedVoice) { u.voice = state.selectedVoice; u.lang = state.selectedVoice.lang; }
+  else u.lang = 'en-GB';
+  window.speechSynthesis.speak(u);
+}
+
+function populateVoices() {
+  const english = window.speechSynthesis.getVoices().filter(v => v.lang.startsWith('en'));
+  if (!english.length) return;
+  el.voiceSelect.innerHTML = '';
+  english.forEach((v, i) => {
+    const o       = document.createElement('option');
+    o.value       = i;
+    o.textContent = v.name + ' (' + v.lang + ')';
+    el.voiceSelect.appendChild(o);
+  });
+  const pref = english.findIndex(v => v.lang === 'en-GB' || v.name.toLowerCase().includes('daniel'));
+  const idx  = pref >= 0 ? pref : 0;
+  el.voiceSelect.value = idx;
+  state.selectedVoice  = english[idx];
+}
+
+/* ── Canvas ── */
 const canvas = document.getElementById('game-canvas');
-const ctx    = canvas.getContext('2d');
+const ctx2d  = canvas.getContext('2d');
 
 /* ── Flash overlay ── */
 const flashEl = document.createElement('div');
 flashEl.className = 'flash-overlay';
 document.body.appendChild(flashEl);
-
 function flash(type) {
   flashEl.className = 'flash-overlay';
   void flashEl.offsetWidth;
@@ -46,7 +167,9 @@ function flash(type) {
 }
 
 /* ── Storage ── */
-const STORE = 'ielts_roadblitz';
+const STORE    = 'ielts_roadblitz_v2';
+const HS_STORE = 'ielts_roadblitz_hs';
+
 function loadProgress() {
   try { return JSON.parse(localStorage.getItem(STORE)) || { playedIds:[], totalScore:0 }; }
   catch { return { playedIds:[], totalScore:0 }; }
@@ -63,21 +186,47 @@ function saveProgress() {
 }
 function resetProgress() {
   try { localStorage.removeItem(STORE); } catch {}
-  state.playedIds = [];
-  state.score     = 0;
-  state.streak    = 0;
+  state.playedIds = []; state.score = 0; state.streak = 0;
   updateStartScreen();
+}
+
+/* ── High scores ── */
+function loadHighScores() {
+  try { return JSON.parse(localStorage.getItem(HS_STORE)) || []; }
+  catch { return []; }
+}
+function saveHighScore(score, topic) {
+  const hs   = loadHighScores();
+  const date = new Date().toLocaleDateString('en-GB', { day:'numeric', month:'short' });
+  hs.push({ score, topic, date });
+  hs.sort((a,b) => b.score - a.score);
+  hs.splice(5); // keep top 5
+  try { localStorage.setItem(HS_STORE, JSON.stringify(hs)); } catch {}
+}
+function renderHighScores() {
+  const hs  = loadHighScores();
+  const list = document.getElementById('hs-list');
+  if (!hs.length) {
+    list.innerHTML = '<li class="hs-empty">No scores yet — hit the road!</li>';
+    return;
+  }
+  list.innerHTML = '';
+  hs.forEach((h, i) => {
+    const li = document.createElement('li');
+    li.className = 'hs-entry';
+    li.innerHTML =
+      '<span class="hs-rank">' + (i+1) + '</span>' +
+      '<div class="hs-info">' +
+        '<div class="hs-topic">' + h.topic + '</div>' +
+        '<div class="hs-date">' + h.date + '</div>' +
+      '</div>' +
+      '<span class="hs-pts">' + h.score + '</span>';
+    list.appendChild(li);
+  });
 }
 
 /* ── DOM refs ── */
 const el = {
-  screens:      {
-    start:  document.getElementById('screen-start'),
-    topic:  document.getElementById('screen-topic'),
-    game:   document.getElementById('screen-game'),
-    review: document.getElementById('screen-review'),
-    done:   document.getElementById('screen-done'),
-  },
   spdBtns:      document.querySelectorAll('.spd'),
   voiceSelect:  document.getElementById('voice-select'),
   voiceTestBtn: document.getElementById('voice-test-btn'),
@@ -95,7 +244,8 @@ const el = {
   hudLeft:      document.getElementById('hud-left'),
   streakFire:   document.getElementById('streak-fire'),
   streakNum:    document.getElementById('streak-num'),
-  tiltHint:     document.getElementById('tilt-hint'),
+  steerLeft:    document.getElementById('steer-left'),
+  steerRight:   document.getElementById('steer-right'),
   reviewScore:  document.getElementById('review-score'),
   reviewStars:  document.getElementById('review-stars'),
   reviewTopic:  document.getElementById('review-topic'),
@@ -104,65 +254,37 @@ const el = {
   btnHome:      document.getElementById('btn-home'),
   doneScore:    document.getElementById('done-score'),
   btnAgain:     document.getElementById('btn-again'),
+  hsClearBtn:   document.getElementById('hs-clear-btn'),
 };
 
-/* ═══════════════════════════════════════════════════
-   SCREEN MANAGEMENT
-═══════════════════════════════════════════════════ */
+/* ── Screen management ── */
+const screens = {
+  start:  document.getElementById('screen-start'),
+  topic:  document.getElementById('screen-topic'),
+  game:   document.getElementById('screen-game'),
+  review: document.getElementById('screen-review'),
+  done:   document.getElementById('screen-done'),
+};
 function showScreen(name) {
-  Object.values(el.screens).forEach(s => s.classList.remove('active'));
-  el.screens[name].classList.add('active');
+  Object.values(screens).forEach(s => s.classList.remove('active'));
+  screens[name].classList.add('active');
   if (name !== 'game') stopGame();
-  window.scrollTo(0, 0);
+  window.scrollTo(0,0);
 }
 
-/* ═══════════════════════════════════════════════════
-   SPEECH
-═══════════════════════════════════════════════════ */
-function speak(word) {
-  if (!window.speechSynthesis) return;
-  window.speechSynthesis.cancel();
-  const u   = new SpeechSynthesisUtterance(word);
-  u.rate    = 0.9;
-  u.pitch   = 1;
-  u.volume  = 1;
-  if (state.selectedVoice) { u.voice = state.selectedVoice; u.lang = state.selectedVoice.lang; }
-  else u.lang = 'en-GB';
-  window.speechSynthesis.speak(u);
-}
-
-function populateVoices() {
-  const english = window.speechSynthesis.getVoices().filter(v => v.lang.startsWith('en'));
-  if (!english.length) return;
-  el.voiceSelect.innerHTML = '';
-  english.forEach((v, i) => {
-    const o = document.createElement('option');
-    o.value = i;
-    o.textContent = v.name + ' (' + v.lang + ')';
-    el.voiceSelect.appendChild(o);
-  });
-  const pref = english.findIndex(v => v.lang==='en-GB' || v.name.toLowerCase().includes('daniel'));
-  const idx  = pref >= 0 ? pref : 0;
-  el.voiceSelect.value = idx;
-  state.selectedVoice  = english[idx];
-}
-
+/* ── Voice ── */
 el.voiceSelect.addEventListener('change', () => {
   const english = window.speechSynthesis.getVoices().filter(v => v.lang.startsWith('en'));
   state.selectedVoice = english[parseInt(el.voiceSelect.value, 10)];
 });
 el.voiceTestBtn.addEventListener('click', () => speak('vocation'));
-
 if (window.speechSynthesis) {
   if (speechSynthesis.getVoices().length) populateVoices();
   speechSynthesis.onvoiceschanged = populateVoices;
 }
 
-/* ═══════════════════════════════════════════════════
-   TILT / ACCELEROMETER
-═══════════════════════════════════════════════════ */
+/* ── Tilt ── */
 el.tiltBtn.addEventListener('click', async () => {
-  // iOS 13+ requires permission
   if (typeof DeviceOrientationEvent !== 'undefined' &&
       typeof DeviceOrientationEvent.requestPermission === 'function') {
     try {
@@ -171,30 +293,43 @@ el.tiltBtn.addEventListener('click', async () => {
       else el.tiltBtn.textContent = 'Permission denied';
     } catch { el.tiltBtn.textContent = 'Not supported'; }
   } else {
-    // Android / desktop — no permission needed
     enableTilt();
   }
 });
-
 function enableTilt() {
   state.tiltEnabled = true;
   el.tiltBtn.textContent = '✓ Tilt enabled';
   el.tiltBtn.classList.add('enabled');
-  window.addEventListener('deviceorientation', onTilt);
+  window.addEventListener('deviceorientation', e => { state.tiltGamma = e.gamma || 0; });
 }
 
-function onTilt(e) {
-  // gamma = left/right tilt, -90 to 90
-  state.tiltGamma = e.gamma || 0;
+/* ── On-screen steering buttons ── */
+function setupSteerButtons() {
+  // Touch events
+  el.steerLeft.addEventListener('touchstart',  e => { e.preventDefault(); state.steerLeft = true;  el.steerLeft.classList.add('pressed'); }, { passive:false });
+  el.steerLeft.addEventListener('touchend',    e => { e.preventDefault(); state.steerLeft = false; el.steerLeft.classList.remove('pressed'); }, { passive:false });
+  el.steerRight.addEventListener('touchstart', e => { e.preventDefault(); state.steerRight = true;  el.steerRight.classList.add('pressed'); }, { passive:false });
+  el.steerRight.addEventListener('touchend',   e => { e.preventDefault(); state.steerRight = false; el.steerRight.classList.remove('pressed'); }, { passive:false });
+  // Mouse events (desktop)
+  el.steerLeft.addEventListener('mousedown',  () => { state.steerLeft = true;  el.steerLeft.classList.add('pressed'); });
+  el.steerLeft.addEventListener('mouseup',    () => { state.steerLeft = false; el.steerLeft.classList.remove('pressed'); });
+  el.steerLeft.addEventListener('mouseleave', () => { state.steerLeft = false; el.steerLeft.classList.remove('pressed'); });
+  el.steerRight.addEventListener('mousedown',  () => { state.steerRight = true;  el.steerRight.classList.add('pressed'); });
+  el.steerRight.addEventListener('mouseup',    () => { state.steerRight = false; el.steerRight.classList.remove('pressed'); });
+  el.steerRight.addEventListener('mouseleave', () => { state.steerRight = false; el.steerRight.classList.remove('pressed'); });
 }
 
-/* ═══════════════════════════════════════════════════
-   START SCREEN
-═══════════════════════════════════════════════════ */
+/* ── Keyboard ── */
+const keys = {};
+window.addEventListener('keydown', e => { keys[e.key] = true; });
+window.addEventListener('keyup',   e => { keys[e.key] = false; });
+
+/* ── Start screen ── */
 function updateStartScreen() {
   const saved = loadProgress();
   const done  = new Set([...saved.playedIds, ...state.playedIds]);
   el.progDone.textContent = done.size;
+  renderHighScores();
 }
 
 el.spdBtns.forEach(btn => {
@@ -206,10 +341,18 @@ el.spdBtns.forEach(btn => {
 });
 
 el.resetBtn.addEventListener('click', () => {
-  if (confirm('Reset all progress? Cannot be undone.')) resetProgress();
+  if (confirm('Reset progress?')) resetProgress();
+});
+
+el.hsClearBtn.addEventListener('click', () => {
+  if (confirm('Clear all high scores?')) {
+    try { localStorage.removeItem(HS_STORE); } catch {}
+    renderHighScores();
+  }
 });
 
 el.btnStart.addEventListener('click', () => {
+  getAudioCtx(); // unlock audio context on user gesture
   const saved     = loadProgress();
   const allPlayed = [...new Set([...saved.playedIds, ...state.playedIds])];
   const topic     = getNextTopic(allPlayed);
@@ -217,17 +360,16 @@ el.btnStart.addEventListener('click', () => {
   loadTopic(topic);
 });
 
-/* ═══════════════════════════════════════════════════
-   TOPIC SCREEN
-═══════════════════════════════════════════════════ */
+/* ── Topic screen ── */
 function loadTopic(topic) {
-  state.currentTopic = topic;
-  state.roundResults = [];
-  state.wordIndex    = 0;
+  state.currentTopic   = topic;
+  state.roundResults   = [];
+  state.wordIndex      = 0;
+  state.usedPairWords  = new Set();
 
+  // Shuffle all keywords; slice to 10
   const all = [...topic.keywords];
   shuffleArray(all);
-  // ensure we have a mix — at least 2 distractors in the set
   state.currentWords = all.slice(0, 10);
 
   el.cueTitle.textContent = topic.title;
@@ -237,7 +379,6 @@ function loadTopic(topic) {
   const allPlayed = new Set([...saved.playedIds, ...state.playedIds]);
   el.topicChip.textContent = 'Topic ' + (allPlayed.size + 1) + ' of 25';
   buildDots(allPlayed.size);
-
   showScreen('topic');
 }
 
@@ -259,138 +400,100 @@ el.btnReady.addEventListener('click', () => {
 /* ═══════════════════════════════════════════════════
    CANVAS GAME ENGINE
 ═══════════════════════════════════════════════════ */
-
-/* ── Road constants (set on resize) ── */
-let W, H, roadLeft, roadRight, roadW, laneW, laneCX, laneCX_L, laneCX_R;
+let W, H, roadLeft, roadRight, roadW, laneCX, laneCX_L, laneCX_R;
 
 function resizeCanvas() {
   W = canvas.width  = window.innerWidth;
   H = canvas.height = window.innerHeight;
-
-  // Road occupies 80% of screen width, centred
-  roadW    = Math.min(W * 0.82, 380);
+  roadW    = Math.min(W * 0.80, 420);
   roadLeft = (W - roadW) / 2;
   roadRight= roadLeft + roadW;
-  laneW    = roadW / 2;
   laneCX   = W / 2;
-  laneCX_L = roadLeft  + laneW / 2;
-  laneCX_R = roadRight - laneW / 2;
+  laneCX_L = roadLeft  + roadW / 4;
+  laneCX_R = roadRight - roadW / 4;
 }
+window.addEventListener('resize', resizeCanvas);
 
-window.addEventListener('resize', () => { resizeCanvas(); });
-
-/* ── Game objects ── */
 let playerCar   = null;
-let enemyCars   = [];  // max 2 active at once
+let enemyCars   = [];
 let particles   = [];
+let hitLabels   = [];
 let roadStripes = [];
 let kerbDashes  = [];
 let bgTrees     = [];
-
-/* ── Timing ── */
 let lastTime    = 0;
-let pairSpawned = false;   // have we spawned the current word pair?
-let waitingNext = false;   // are we pausing before next word?
+let pairSpawned = false;
+let waitingNext = false;
 let waitTimer   = 0;
-const WAIT_MS   = 900;     // pause after collision before next pair
+const WAIT_MS   = 1100;  // slightly longer to fit crash sound + speech
 
-/* ── Player car shape ── */
-function makePlayerCar() {
-  return {
-    x:      W / 2,
-    y:      H * 0.78,
-    w:      Math.min(roadW * 0.22, 52),
-    h:      0,        // set from w
-    speed:  SPEEDS[state.speed],
-    vx:     0,
-    color:  '#4db8ff',
-    highlight: '#a8d8ff',
-    shadow: '#1a6090',
-  };
-}
+/* ── Car sizing ── */
+function carW()  { return Math.min(roadW * 0.20, 58); }
+function carH(w) { return w * 1.9; }
 
-/* ── Enemy car colours ── */
 const ENEMY_COLORS = [
-  { body:'#e85454', roof:'#c43535', window:'#ff9999' },
-  { body:'#e8a832', roof:'#c48a1a', window:'#ffe499' },
-  { body:'#9b59f5', roof:'#6a2db8', window:'#d4aaff' },
-  { body:'#2ecc8a', roof:'#1a9960', window:'#99ffd0' },
-  { body:'#f06030', roof:'#b84020', window:'#ffaa80' },
+  { body:'#e85454', roof:'#c43535', win:'#ff9999' },
+  { body:'#e8a832', roof:'#c48a1a', win:'#ffe499' },
+  { body:'#9b59f5', roof:'#6a2db8', win:'#d4aaff' },
+  { body:'#2ecc8a', roof:'#1a9960', win:'#99ffd0' },
+  { body:'#f06030', roof:'#b84020', win:'#ffaa80' },
+  { body:'#e84da0', roof:'#b02875', win:'#ffaadd' },
 ];
 
 function makeEnemyCar(lane, wordObj, colorIdx) {
-  const cx = lane === 'left' ? laneCX_L : laneCX_R;
-  const w  = Math.min(roadW * 0.22, 52);
-  const col= ENEMY_COLORS[colorIdx % ENEMY_COLORS.length];
+  const cx  = lane === 'left' ? laneCX_L : laneCX_R;
+  const w   = carW();
+  const col = ENEMY_COLORS[colorIdx % ENEMY_COLORS.length];
   return {
-    x:       cx,
-    y:       -120,
-    w:       w,
-    h:       w * 1.9,
-    lane:    lane,
-    wordObj: wordObj,
-    col:     col,
+    x: cx, y: -160,
+    w, h: carH(w),
+    lane, wordObj, col,
     speed:   SPEEDS[state.speed] * 0.55,
     alive:   true,
-    hit:     false,
-    hitVx:   0,
-    hitVy:   0,
-    hitRot:  0,
-    hitRotV: 0,
+    hitVx:   0, hitVy: 0,
+    hitRot:  0, hitRotV: 0,
     opacity: 1,
   };
 }
 
-/* ── Road stripes (dashed centre line moving downward) ── */
 function initRoad() {
   roadStripes = [];
-  const stripeH = 48, gap = 40;
-  const total   = Math.ceil(H / (stripeH + gap)) + 2;
-  for (let i = 0; i < total; i++) {
-    roadStripes.push({ y: i * (stripeH + gap) });
-  }
+  const sh = 48, sg = 40;
+  const n  = Math.ceil(H / (sh + sg)) + 2;
+  for (let i = 0; i < n; i++) roadStripes.push({ y: i * (sh + sg) });
 
   kerbDashes = [];
-  const kDash = 32, kGap = 24;
-  const kTotal= Math.ceil(H / (kDash + kGap)) + 2;
-  for (let i = 0; i < kTotal; i++) {
-    kerbDashes.push({ y: i * (kDash + kGap) });
-  }
+  const kd = 32, kg = 24;
+  const kn = Math.ceil(H / (kd + kg)) + 2;
+  for (let i = 0; i < kn; i++) kerbDashes.push({ y: i * (kd + kg) });
 
   bgTrees = [];
-  for (let i = 0; i < 12; i++) {
-    bgTrees.push(makeBgTree(i));
-  }
+  for (let i = 0; i < 14; i++) bgTrees.push(makeBgTree(i));
 }
 
 function makeBgTree(i) {
-  const side  = i % 2 === 0 ? 'left' : 'right';
-  const xBase = side === 'left'
+  const side = i % 2 === 0 ? 'left' : 'right';
+  const xBase= side === 'left'
     ? roadLeft * 0.5
     : roadRight + (W - roadRight) * 0.5;
   return {
-    x:    xBase + (Math.random() - 0.5) * (roadLeft * 0.6),
-    y:    Math.random() * H,
-    r:    6 + Math.random() * 8,
-    side: side,
+    x: xBase + (Math.random()-0.5) * (roadLeft * 0.6),
+    y: Math.random() * H,
+    r: 7 + Math.random() * 9,
     shade: Math.random() > 0.5 ? '#2d4a2a' : '#3a5c36',
   };
 }
 
-/* ── Particle explosion ── */
 function spawnParticles(x, y, color) {
-  const count = 22;
-  for (let i = 0; i < count; i++) {
-    const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.5;
-    const speed = 2 + Math.random() * 5;
+  for (let i = 0; i < 24; i++) {
+    const angle = (Math.PI * 2 * i / 24) + (Math.random()-0.5) * 0.5;
+    const spd   = 2.5 + Math.random() * 5;
     particles.push({
       x, y,
-      vx:      Math.cos(angle) * speed,
-      vy:      Math.sin(angle) * speed,
-      r:       3 + Math.random() * 4,
-      color:   color,
-      life:    1,
-      decay:   0.025 + Math.random() * 0.03,
+      vx: Math.cos(angle)*spd, vy: Math.sin(angle)*spd,
+      r: 3 + Math.random()*4,
+      color, life: 1,
+      decay: 0.024 + Math.random()*0.028,
     });
   }
 }
@@ -398,104 +501,87 @@ function spawnParticles(x, y, color) {
 /* ── Start / stop ── */
 function startGame() {
   resizeCanvas();
-
-  // Setup player car
-  playerCar       = makePlayerCar();
-  playerCar.h     = playerCar.w * 1.9;
-
-  enemyCars       = [];
-  particles       = [];
-  pairSpawned     = false;
-  waitingNext     = false;
-  waitTimer       = 0;
-  state.running   = true;
-
+  const w    = carW();
+  playerCar  = { x: W/2, y: H*0.78, w, h: carH(w), vx: 0 };
+  enemyCars  = []; particles = []; hitLabels = [];
+  pairSpawned= false; waitingNext = false; waitTimer = 0;
+  state.running = true;
+  state.usedPairWords = new Set();
   initRoad();
   updateHUD();
-
-  // Hide tilt hint after 3s
-  el.tiltHint.classList.remove('hidden');
-  setTimeout(() => el.tiltHint.classList.add('hidden'), 3000);
-
+  startEngine();
   lastTime = performance.now();
   state.animFrame = requestAnimationFrame(gameLoop);
 }
 
 function stopGame() {
   state.running = false;
-  if (state.animFrame) {
-    cancelAnimationFrame(state.animFrame);
-    state.animFrame = null;
-  }
+  if (state.animFrame) { cancelAnimationFrame(state.animFrame); state.animFrame = null; }
+  stopEngine();
 }
 
-/* ── Main loop ── */
+/* ── Game loop ── */
 function gameLoop(ts) {
   if (!state.running) return;
-  const dt = Math.min(ts - lastTime, 32); // cap at 32ms
+  const dt = Math.min(ts - lastTime, 32);
   lastTime = ts;
-
   update(dt);
   draw();
-
   state.animFrame = requestAnimationFrame(gameLoop);
 }
 
 /* ── Update ── */
 function update(dt) {
-  const spd    = SPEEDS[state.speed];
-  const scroll = spd * (dt / 16.67);   // normalise to 60fps
+  const scroll = SPEEDS[state.speed] * (dt / 16.67);
 
-  // ── Player steering via tilt ──
+  // Steering — tilt takes priority, then on-screen buttons, then keyboard
   if (state.tiltEnabled) {
     const tilt  = Math.max(-45, Math.min(45, state.tiltGamma));
     const force = (tilt / 45) * 5.5;
     playerCar.vx += force * 0.18;
-    playerCar.vx *= 0.82;  // friction
+    playerCar.vx *= 0.82;
   } else {
-    // Keyboard fallback (arrow keys)
-    if (keys.ArrowLeft)  { playerCar.vx -= 0.6; }
-    if (keys.ArrowRight) { playerCar.vx += 0.6; }
-    playerCar.vx *= 0.85;
+    const goLeft  = state.steerLeft  || keys['ArrowLeft']  || keys['a'] || keys['A'];
+    const goRight = state.steerRight || keys['ArrowRight'] || keys['d'] || keys['D'];
+    if (goLeft)  playerCar.vx -= 0.7;
+    if (goRight) playerCar.vx += 0.7;
+    playerCar.vx *= 0.84;
   }
 
   playerCar.x = Math.max(roadLeft  + playerCar.w/2,
                  Math.min(roadRight - playerCar.w/2,
                           playerCar.x + playerCar.vx));
 
-  // ── Road scroll ──
-  const stripeH = 48, gap = 40;
+  // Road scroll
+  const sh = 48, sg = 40;
   roadStripes.forEach(s => {
     s.y += scroll;
-    if (s.y > H + stripeH) s.y -= (stripeH + gap) * roadStripes.length;
+    if (s.y > H + sh) s.y -= (sh + sg) * roadStripes.length;
   });
-
-  const kDash = 32, kGap = 24;
+  const kd = 32, kg = 24;
   kerbDashes.forEach(k => {
     k.y += scroll;
-    if (k.y > H + kDash) k.y -= (kDash + kGap) * kerbDashes.length;
+    if (k.y > H + kd) k.y -= (kd + kg) * kerbDashes.length;
   });
-
   bgTrees.forEach(t => {
     t.y += scroll * 0.4;
     if (t.y > H + 40) t.y = -40;
   });
 
-  // ── Spawn enemy pair ──
+  // Spawn pair
   if (!pairSpawned && !waitingNext) {
     if (state.wordIndex < state.currentWords.length) {
       spawnNextPair();
       pairSpawned = true;
     } else {
-      endRound();
-      return;
+      endRound(); return;
     }
   }
 
-  // ── Update enemy cars ──
+  // Update enemy cars
+  let allGone = true;
   enemyCars.forEach(car => {
     if (!car.alive) {
-      // spin & fade out after hit
       car.x      += car.hitVx;
       car.y      += car.hitVy;
       car.hitRot += car.hitRotV;
@@ -503,158 +589,134 @@ function update(dt) {
       return;
     }
     car.y += scroll + car.speed * (dt / 16.67);
-
-    // ── Collision check ──
-    if (carsOverlap(playerCar, car)) {
-      handleCollision(car);
-    }
-
-    // ── Missed (drove past player) ──
-    if (car.y > H + car.h) {
-      car.alive = false;
-    }
+    if (car.y < H + car.h) allGone = false;
+    if (carsOverlap(playerCar, car)) handleCollision(car);
   });
 
-  // ── Check if both enemy cars gone ──
-  const allGone = enemyCars.every(c => !c.alive || c.y > H + c.h);
+  // Both cars drove past — missed
   if (pairSpawned && allGone && !waitingNext) {
-    // Player missed both — count as timeout for the word
     const wordObj = state.currentWords[state.wordIndex];
     if (wordObj && !state.roundResults.find(r => r.word.word === wordObj.word)) {
-      state.roundResults.push({ word: wordObj, hit: false, correct: false, missed: true });
-      state.streak = 0;
-      updateStreak();
+      state.roundResults.push({ word: wordObj, hit:false, correct:false, missed:true });
+      state.streak = 0; updateStreak();
     }
     advanceToNext();
   }
 
-  // ── Wait timer before next word ──
   if (waitingNext) {
     waitTimer -= dt;
-    if (waitTimer <= 0) {
-      waitingNext = false;
-      pairSpawned = false;
-      enemyCars   = [];
-    }
+    if (waitTimer <= 0) { waitingNext = false; pairSpawned = false; enemyCars = []; }
   }
 
-  // ── Particles ──
-  particles.forEach(p => {
-    p.x    += p.vx;
-    p.y    += p.vy;
-    p.vy   += 0.12;
-    p.life -= p.decay;
-  });
+  // Particles
+  particles.forEach(p => { p.x+=p.vx; p.y+=p.vy; p.vy+=0.12; p.life-=p.decay; });
   particles = particles.filter(p => p.life > 0);
+
+  // Hit labels
+  hitLabels.forEach(l => { l.y += l.vy; l.life -= 0.022; });
+  hitLabels = hitLabels.filter(l => l.life > 0);
 }
 
-/* ── Spawn a word pair ── */
+/* ── Spawn word pair — NO repeats ── */
 function spawnNextPair() {
   const wordObj = state.currentWords[state.wordIndex];
   if (!wordObj) return;
 
-  // Pick a random distractor from a different position
-  const distractors = state.currentWords.filter(w => !w.correct);
-  const others      = state.currentWords.filter(w => w !== wordObj && w.correct !== wordObj.correct);
-  let   pairedWord  = null;
+  // Build pool of candidate pair words:
+  // Must be opposite type (correct vs distractor) and not recently used as a pair
+  const isCorrect   = wordObj.correct;
+  const candidates  = state.currentWords.filter(w =>
+    w !== wordObj &&
+    w.correct !== isCorrect &&
+    !state.usedPairWords.has(w.word)
+  );
 
-  if (wordObj.correct) {
-    // show a distractor alongside a correct word
-    pairedWord = distractors.length
-      ? distractors[Math.floor(Math.random() * distractors.length)]
-      : state.currentWords.find(w => w !== wordObj) || wordObj;
-  } else {
-    // show a correct word alongside this distractor
-    const corrects = state.currentWords.filter(w => w.correct);
-    pairedWord = corrects.length
-      ? corrects[Math.floor(Math.random() * corrects.length)]
-      : state.currentWords.find(w => w !== wordObj) || wordObj;
+  // If we exhausted unique pairs, reset the used set (but still avoid same word)
+  if (!candidates.length) {
+    state.usedPairWords.clear();
+    const fallback = state.currentWords.filter(w => w !== wordObj && w.correct !== isCorrect);
+    candidates.push(...fallback);
   }
 
-  // Randomly assign lanes
+  // Shuffle candidates and pick first
+  shuffleArray(candidates);
+  const pairedWord = candidates[0] || state.currentWords.find(w => w !== wordObj);
+
+  // Mark paired word as used
+  state.usedPairWords.add(pairedWord.word);
+
+  // Randomise lanes
   const leftWord  = Math.random() > 0.5 ? wordObj : pairedWord;
   const rightWord = leftWord === wordObj ? pairedWord : wordObj;
 
   const colorA = Math.floor(Math.random() * ENEMY_COLORS.length);
-  const colorB = (colorA + 1 + Math.floor(Math.random() * (ENEMY_COLORS.length - 1))) % ENEMY_COLORS.length;
+  const colorB = (colorA + 2) % ENEMY_COLORS.length;
 
   enemyCars = [
     makeEnemyCar('left',  leftWord,  colorA),
     makeEnemyCar('right', rightWord, colorB),
   ];
 
-  // Speak the correct word
-  speak(wordObj.correct ? wordObj.word : pairedWord.word);
+  // No auto-speak — word spoken AFTER collision (fix #4)
 }
 
 /* ── Collision ── */
 function carsOverlap(player, enemy) {
-  const pw = player.w * 0.7, ph = player.h * 0.7;
-  const ew = enemy.w  * 0.7, eh = enemy.h  * 0.7;
-  return Math.abs(player.x - enemy.x) < (pw + ew) / 2 &&
-         Math.abs(player.y - enemy.y) < (ph + eh) / 2;
+  const pw = player.w * 0.68, ph = player.h * 0.68;
+  const ew = enemy.w  * 0.68, eh = enemy.h  * 0.68;
+  return Math.abs(player.x - enemy.x) < (pw+ew)/2 &&
+         Math.abs(player.y - enemy.y) < (ph+eh)/2;
 }
 
 function handleCollision(car) {
   if (!car.alive) return;
-  car.alive  = false;
-  car.hitVx  = (car.x - playerCar.x) * 0.25;
-  car.hitVy  = -3 - Math.random() * 2;
-  car.hitRotV= (Math.random() - 0.5) * 0.18;
+  car.alive   = false;
+  car.hitVx   = (car.x - playerCar.x) * 0.28;
+  car.hitVy   = -3.5 - Math.random() * 2;
+  car.hitRotV = (Math.random()-0.5) * 0.2;
 
-  const wordObj   = state.currentWords[state.wordIndex];
-  const isCorrect = car.wordObj === wordObj
-    ? wordObj.correct         // rammed the current word
-    : !wordObj.correct;       // rammed the paired word, which is correct only if wordObj is distractor
-
-  // More precisely: correct if car.wordObj.correct === true
   const actuallyCorrect = car.wordObj.correct;
+  const wordObj         = state.currentWords[state.wordIndex];
 
   state.roundResults.push({
     word:    wordObj,
+    rammedWord: car.wordObj,
     hit:     true,
     correct: actuallyCorrect,
     missed:  false,
   });
 
+  // Kill other car
+  enemyCars.forEach(c => {
+    if (c !== car && c.alive) {
+      c.alive = false; c.hitVx = (c.x-playerCar.x)*0.15;
+      c.hitVy = -1.5;  c.hitRotV = (Math.random()-0.5)*0.1;
+    }
+  });
+
   if (actuallyCorrect) {
-    // Good hit
     const points = 10 + streakBonus();
     state.score += points;
     state.streak++;
     if (state.streak > state.bestStreak) state.bestStreak = state.streak;
-    updateHUD();
-    updateStreak();
+    updateHUD(); updateStreak();
     spawnParticles(car.x, car.y, car.col.body);
     flash('green');
-    showHitLabel('+' + points, car.x, car.y, '#30e88a');
+    hitLabels.push({ text:'+'+points, x:car.x, y:car.y, color:'#30e88a', life:1, vy:-1.6 });
   } else {
-    // Wrong hit
-    state.streak = 0;
-    updateStreak();
+    state.streak = 0; updateStreak();
     spawnParticles(car.x, car.y, '#ff4d4d');
     flash('red');
-    showHitLabel('WRONG', car.x, car.y, '#ff4d4d');
+    hitLabels.push({ text:'WRONG', x:car.x, y:car.y, color:'#ff4d4d', life:1, vy:-1.6 });
   }
 
-  // Kill the other car too (advance cleanly)
-  enemyCars.forEach(c => { if (c !== car && c.alive) {
-    c.alive  = false;
-    c.hitVx  = (c.x - playerCar.x) * 0.15;
-    c.hitVy  = -1;
-    c.hitRotV= (Math.random() - 0.5) * 0.08;
-  }});
+  // Play crash sound immediately, then speak the rammed word after 350ms
+  playCrash(actuallyCorrect);
+  setTimeout(() => speak(car.wordObj.word), 360);
 
   advanceToNext();
 }
 
-/* ── Hit label (floating +10 etc.) ── */
-let hitLabels = [];
-function showHitLabel(text, x, y, color) {
-  hitLabels.push({ text, x, y, color, life: 1, vy: -1.5 });
-}
-
-/* ── Advance to next word ── */
 function advanceToNext() {
   state.wordIndex++;
   el.hudLeft.textContent = Math.max(0, state.currentWords.length - state.wordIndex);
@@ -663,18 +725,12 @@ function advanceToNext() {
 }
 
 function streakBonus() {
-  if (state.streak >= 9)  return 8;
-  if (state.streak >= 5)  return 5;
-  if (state.streak >= 2)  return 3;
+  if (state.streak >= 9) return 8;
+  if (state.streak >= 5) return 5;
+  if (state.streak >= 2) return 3;
   return 0;
 }
 
-/* ── Keyboard fallback ── */
-const keys = {};
-window.addEventListener('keydown', e => { keys[e.key] = true; });
-window.addEventListener('keyup',   e => { keys[e.key] = false; });
-
-/* ── HUD ── */
 function updateHUD() {
   el.hudScore.textContent = state.score;
   el.hudTopic.textContent = state.currentTopic ? state.currentTopic.title : '';
@@ -682,12 +738,12 @@ function updateHUD() {
 }
 
 function updateStreak() {
-  el.streakNum.textContent = state.streak;
-  let emoji = '✦';
-  if (state.streak >= 10) emoji = '🔥🔥🔥';
-  else if (state.streak >= 6) emoji = '🔥🔥';
-  else if (state.streak >= 3) emoji = '🔥';
-  el.streakFire.textContent = emoji;
+  el.streakNum.textContent  = state.streak;
+  let e = '✦';
+  if (state.streak >= 10) e = '🔥🔥🔥';
+  else if (state.streak >= 6) e = '🔥🔥';
+  else if (state.streak >= 3) e = '🔥';
+  el.streakFire.textContent = e;
   el.streakFire.classList.remove('pop');
   void el.streakFire.offsetWidth;
   if (state.streak > 0) el.streakFire.classList.add('pop');
@@ -697,249 +753,223 @@ function updateStreak() {
    DRAW
 ═══════════════════════════════════════════════════ */
 function draw() {
-  ctx.clearRect(0, 0, W, H);
-
+  ctx2d.clearRect(0, 0, W, H);
   drawRoad();
   drawBgTrees();
-
-  // Draw dead enemy cars (spinning away)
-  enemyCars.filter(c => !c.alive).forEach(drawEnemyCar);
-
-  // Draw live enemy cars
-  enemyCars.filter(c => c.alive).forEach(drawEnemyCar);
-
+  enemyCars.filter(c => !c.alive).forEach(c => drawCar(c, false));
+  enemyCars.filter(c =>  c.alive).forEach(c => drawCar(c, false));
   drawPlayerCar();
   drawParticles();
   drawHitLabels();
 }
 
-/* ── Road ── */
 function drawRoad() {
-  // Kerb (outer edges)
-  ctx.fillStyle = '#1a1d24';
-  ctx.fillRect(0, 0, roadLeft, H);
-  ctx.fillRect(roadRight, 0, W - roadRight, H);
+  ctx2d.fillStyle = '#1a1d24';
+  ctx2d.fillRect(0, 0, roadLeft, H);
+  ctx2d.fillRect(roadRight, 0, W - roadRight, H);
 
-  // Tarmac
-  ctx.fillStyle = '#2a2d35';
-  ctx.fillRect(roadLeft, 0, roadW, H);
+  ctx2d.fillStyle = '#2a2d35';
+  ctx2d.fillRect(roadLeft, 0, roadW, H);
 
-  // Lane divider (dashed centre line)
-  ctx.strokeStyle = 'rgba(255,255,255,0.18)';
-  ctx.lineWidth   = 3;
-  ctx.setLineDash([48, 40]);
-  ctx.beginPath();
-  ctx.moveTo(laneCX, 0);
-  ctx.lineTo(laneCX, H);
-  ctx.stroke();
-  ctx.setLineDash([]);
+  // Centre dashes
+  ctx2d.strokeStyle = 'rgba(255,255,255,0.16)';
+  ctx2d.lineWidth   = 3;
+  ctx2d.setLineDash([48, 40]);
+  ctx2d.beginPath();
+  ctx2d.moveTo(laneCX, 0); ctx2d.lineTo(laneCX, H);
+  ctx2d.stroke();
+  ctx2d.setLineDash([]);
 
-  // Kerb stripes
-  const kDash = 32, kGap = 24;
+  // Kerb dashes
+  const kd = 32;
   kerbDashes.forEach(k => {
-    // Left kerb
-    ctx.fillStyle = '#fff';
-    ctx.globalAlpha = 0.15;
-    ctx.fillRect(roadLeft - 6, k.y, 6, kDash);
-    // Right kerb
-    ctx.fillRect(roadRight, k.y, 6, kDash);
-    ctx.globalAlpha = 1;
+    ctx2d.globalAlpha = 0.13;
+    ctx2d.fillStyle   = '#ffffff';
+    ctx2d.fillRect(roadLeft - 7, k.y, 7, kd);
+    ctx2d.fillRect(roadRight,    k.y, 7, kd);
+    ctx2d.globalAlpha = 1;
   });
 
-  // Road edge lines
-  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
-  ctx.lineWidth   = 2;
-  ctx.beginPath();
-  ctx.moveTo(roadLeft, 0); ctx.lineTo(roadLeft, H);
-  ctx.moveTo(roadRight, 0); ctx.lineTo(roadRight, H);
-  ctx.stroke();
+  ctx2d.strokeStyle = 'rgba(255,255,255,0.22)';
+  ctx2d.lineWidth   = 2;
+  ctx2d.beginPath();
+  ctx2d.moveTo(roadLeft,  0); ctx2d.lineTo(roadLeft,  H);
+  ctx2d.moveTo(roadRight, 0); ctx2d.lineTo(roadRight, H);
+  ctx2d.stroke();
 }
 
 function drawBgTrees() {
   bgTrees.forEach(t => {
-    // trunk
-    ctx.fillStyle = '#3a2a1a';
-    ctx.fillRect(t.x - 2, t.y - t.r, 4, t.r * 1.5);
-    // canopy
-    ctx.beginPath();
-    ctx.arc(t.x, t.y - t.r, t.r, 0, Math.PI * 2);
-    ctx.fillStyle = t.shade;
-    ctx.fill();
+    ctx2d.fillStyle = '#3a2a1a';
+    ctx2d.fillRect(t.x-2, t.y-t.r, 4, t.r*1.5);
+    ctx2d.beginPath();
+    ctx2d.arc(t.x, t.y-t.r, t.r, 0, Math.PI*2);
+    ctx2d.fillStyle = t.shade;
+    ctx2d.fill();
   });
 }
 
-/* ── Draw a car (player or enemy) ── */
 function drawPlayerCar() {
-  const c = playerCar;
-  ctx.save();
-  ctx.translate(c.x, c.y);
-
-  const w = c.w, h = c.h;
-  const hw = w/2, hh = h/2;
+  const c  = playerCar;
+  const hw = c.w/2, hh = c.h/2;
+  ctx2d.save();
+  ctx2d.translate(c.x, c.y);
 
   // Shadow
-  ctx.fillStyle = 'rgba(0,0,0,0.3)';
-  ctx.beginPath();
-  ctx.ellipse(4, hh + 4, hw * 0.8, 6, 0, 0, Math.PI * 2);
-  ctx.fill();
+  ctx2d.fillStyle = 'rgba(0,0,0,0.28)';
+  ctx2d.beginPath();
+  ctx2d.ellipse(3, hh+4, hw*0.8, 5, 0, 0, Math.PI*2);
+  ctx2d.fill();
 
   // Body
-  ctx.fillStyle = c.color;
-  roundRect(ctx, -hw, -hh, w, h, 8);
-  ctx.fill();
+  ctx2d.fillStyle = '#4db8ff';
+  rrect(ctx2d, -hw, -hh, c.w, c.h, 8);
+  ctx2d.fill();
 
   // Roof
-  ctx.fillStyle = c.shadow;
-  roundRect(ctx, -hw * 0.7, -hh * 0.55, w * 0.7, h * 0.38, 5);
-  ctx.fill();
+  ctx2d.fillStyle = '#1a6090';
+  rrect(ctx2d, -hw*0.7, -hh*0.55, c.w*0.7, c.h*0.38, 5);
+  ctx2d.fill();
 
   // Windscreen
-  ctx.fillStyle = 'rgba(180,230,255,0.6)';
-  roundRect(ctx, -hw * 0.6, -hh * 0.52, w * 0.6, h * 0.22, 4);
-  ctx.fill();
-
-  // Rear window
-  ctx.fillStyle = 'rgba(180,230,255,0.4)';
-  roundRect(ctx, -hw * 0.55, hh * 0.12, w * 0.55, h * 0.14, 3);
-  ctx.fill();
+  ctx2d.fillStyle = 'rgba(180,230,255,0.55)';
+  rrect(ctx2d, -hw*0.6, -hh*0.52, c.w*0.6, c.h*0.22, 4);
+  ctx2d.fill();
 
   // Headlights
-  ctx.fillStyle = '#ffffaa';
-  ctx.fillRect(-hw + 3, -hh + 3, 8, 5);
-  ctx.fillRect(hw - 11, -hh + 3, 8, 5);
+  ctx2d.fillStyle = '#ffffaa';
+  ctx2d.fillRect(-hw+3, -hh+3, 9, 5);
+  ctx2d.fillRect( hw-12,-hh+3, 9, 5);
 
   // Tail lights
-  ctx.fillStyle = '#ff4444';
-  ctx.fillRect(-hw + 3, hh - 8, 8, 5);
-  ctx.fillRect(hw - 11, hh - 8, 8, 5);
+  ctx2d.fillStyle = '#ff4444';
+  ctx2d.fillRect(-hw+3, hh-8, 9, 5);
+  ctx2d.fillRect( hw-12,hh-8, 9, 5);
 
-  ctx.restore();
+  ctx2d.restore();
 }
 
-function drawEnemyCar(car) {
-  ctx.save();
-  ctx.globalAlpha = car.opacity;
-  ctx.translate(car.x, car.y);
-  if (!car.alive) ctx.rotate(car.hitRot);
-
-  const w = car.w, h = car.h;
-  const hw = w/2, hh = h/2;
-  const col = car.col;
+function drawCar(car, _isPlayer) {
+  const hw = car.w/2, hh = car.h/2;
+  ctx2d.save();
+  ctx2d.globalAlpha = car.opacity;
+  ctx2d.translate(car.x, car.y);
+  if (!car.alive) ctx2d.rotate(car.hitRot);
 
   // Shadow
-  ctx.fillStyle = 'rgba(0,0,0,0.25)';
-  ctx.beginPath();
-  ctx.ellipse(4, hh + 4, hw * 0.8, 6, 0, 0, Math.PI * 2);
-  ctx.fill();
+  ctx2d.fillStyle = 'rgba(0,0,0,0.22)';
+  ctx2d.beginPath();
+  ctx2d.ellipse(3, hh+4, hw*0.8, 5, 0, 0, Math.PI*2);
+  ctx2d.fill();
 
   // Body
-  ctx.fillStyle = col.body;
-  roundRect(ctx, -hw, -hh, w, h, 8);
-  ctx.fill();
+  ctx2d.fillStyle = car.col.body;
+  rrect(ctx2d, -hw, -hh, car.w, car.h, 8);
+  ctx2d.fill();
 
-  // Roof / word label area
-  ctx.fillStyle = col.roof;
-  roundRect(ctx, -hw * 0.75, -hh * 0.6, w * 0.75, h * 0.42, 5);
-  ctx.fill();
+  // Roof
+  ctx2d.fillStyle = car.col.roof;
+  rrect(ctx2d, -hw*0.75, -hh*0.6, car.w*0.75, car.h*0.42, 5);
+  ctx2d.fill();
 
   // Windscreen
-  ctx.fillStyle = col.window;
-  ctx.globalAlpha *= 0.6;
-  roundRect(ctx, -hw * 0.62, -hh * 0.56, w * 0.62, h * 0.22, 4);
-  ctx.fill();
-  ctx.globalAlpha = car.opacity;
+  ctx2d.globalAlpha *= 0.55;
+  ctx2d.fillStyle = car.col.win;
+  rrect(ctx2d, -hw*0.62, -hh*0.56, car.w*0.62, car.h*0.22, 4);
+  ctx2d.fill();
+  ctx2d.globalAlpha = car.opacity;
 
-  // Headlights (facing down = toward player)
-  ctx.fillStyle = '#ffffaa';
-  ctx.fillRect(-hw + 3, hh - 8, 8, 5);
-  ctx.fillRect(hw - 11, hh - 8, 8, 5);
+  // Tail lights (facing player)
+  ctx2d.fillStyle = '#ffffaa';
+  ctx2d.fillRect(-hw+3, hh-8, 9, 5);
+  ctx2d.fillRect( hw-12,hh-8, 9, 5);
 
-  // Word label on roof
-  const fontSize  = Math.max(11, Math.min(w * 0.38, 16));
-  const labelText = car.wordObj.word;
-  ctx.font        = '800 ' + fontSize + 'px "Barlow Condensed", sans-serif';
-  ctx.textAlign   = 'center';
-  ctx.textBaseline= 'middle';
+  // ── Word label — LARGER font ──
+  const word      = car.wordObj.word;
+  const maxWidth  = car.w * 1.6;  // allow label wider than car
+  // Dynamic font size: start large and scale down if needed
+  let fontSize = Math.min(car.w * 0.52, 22);
+  ctx2d.font = '900 ' + fontSize + 'px "Barlow Condensed", sans-serif';
+  while (ctx2d.measureText(word).width > maxWidth - 10 && fontSize > 11) {
+    fontSize -= 1;
+    ctx2d.font = '900 ' + fontSize + 'px "Barlow Condensed", sans-serif';
+  }
 
-  // Label background pill
-  const tw  = ctx.measureText(labelText).width;
-  const pad = 6;
-  ctx.fillStyle = 'rgba(0,0,0,0.55)';
-  roundRect(ctx, -(tw/2 + pad), -hh*0.38, tw + pad*2, fontSize + 8, 4);
-  ctx.fill();
+  ctx2d.textAlign    = 'center';
+  ctx2d.textBaseline = 'middle';
+  const tw  = ctx2d.measureText(word).width;
+  const pad = 8;
+  const lw  = tw + pad * 2;
+  const lh  = fontSize + 10;
+  const ly  = -hh * 0.3;
 
-  // Label text — colour indicates fits/distractor (only after answered, here always white for challenge)
-  ctx.fillStyle = '#ffffff';
-  ctx.fillText(labelText, 0, -hh * 0.25);
+  // Label pill background
+  ctx2d.fillStyle = 'rgba(0,0,0,0.62)';
+  rrect(ctx2d, -lw/2, ly - lh/2, lw, lh, 5);
+  ctx2d.fill();
 
-  ctx.restore();
+  // Label text
+  ctx2d.fillStyle    = '#ffffff';
+  ctx2d.strokeStyle  = 'rgba(0,0,0,0.5)';
+  ctx2d.lineWidth    = 2.5;
+  ctx2d.strokeText(word, 0, ly);
+  ctx2d.fillText(word, 0, ly);
+
+  ctx2d.restore();
 }
 
-/* ── Particles ── */
 function drawParticles() {
   particles.forEach(p => {
-    ctx.globalAlpha = p.life;
-    ctx.fillStyle   = p.color;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.r * p.life, 0, Math.PI * 2);
-    ctx.fill();
+    ctx2d.globalAlpha = p.life;
+    ctx2d.fillStyle   = p.color;
+    ctx2d.beginPath();
+    ctx2d.arc(p.x, p.y, p.r * p.life, 0, Math.PI*2);
+    ctx2d.fill();
   });
-  ctx.globalAlpha = 1;
+  ctx2d.globalAlpha = 1;
 }
 
-/* ── Hit labels ── */
 function drawHitLabels() {
   hitLabels.forEach(l => {
-    l.y    += l.vy;
-    l.life -= 0.025;
+    ctx2d.globalAlpha   = l.life;
+    ctx2d.font          = '900 28px "Barlow Condensed", sans-serif';
+    ctx2d.textAlign     = 'center';
+    ctx2d.textBaseline  = 'middle';
+    ctx2d.strokeStyle   = 'rgba(0,0,0,0.55)';
+    ctx2d.lineWidth     = 3.5;
+    ctx2d.strokeText(l.text, l.x, l.y);
+    ctx2d.fillStyle     = l.color;
+    ctx2d.fillText(l.text, l.x, l.y);
   });
-  hitLabels = hitLabels.filter(l => l.life > 0);
-
-  hitLabels.forEach(l => {
-    ctx.globalAlpha    = l.life;
-    ctx.font           = '900 28px "Barlow Condensed", sans-serif';
-    ctx.textAlign      = 'center';
-    ctx.textBaseline   = 'middle';
-    ctx.fillStyle      = l.color;
-    ctx.strokeStyle    = 'rgba(0,0,0,0.5)';
-    ctx.lineWidth      = 3;
-    ctx.strokeText(l.text, l.x, l.y);
-    ctx.fillText(l.text, l.x, l.y);
-  });
-  ctx.globalAlpha = 1;
+  ctx2d.globalAlpha = 1;
 }
 
-/* ── Rounded rect helper ── */
-function roundRect(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y,     x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x,     y + h, x,     y + h - r);
-  ctx.lineTo(x,     y + r);
-  ctx.quadraticCurveTo(x,     y,     x + r, y);
-  ctx.closePath();
+function rrect(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x+r, y);
+  c.lineTo(x+w-r, y); c.quadraticCurveTo(x+w, y,   x+w, y+r);
+  c.lineTo(x+w, y+h-r); c.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+  c.lineTo(x+r, y+h); c.quadraticCurveTo(x,   y+h, x,   y+h-r);
+  c.lineTo(x, y+r); c.quadraticCurveTo(x,   y,   x+r, y);
+  c.closePath();
 }
 
 /* ═══════════════════════════════════════════════════
-   END OF ROUND
+   END ROUND
 ═══════════════════════════════════════════════════ */
 function endRound() {
   stopGame();
-
   if (!state.playedIds.includes(state.currentTopic.id)) {
     state.playedIds.push(state.currentTopic.id);
   }
   saveProgress();
+  saveHighScore(state.score, state.currentTopic.title);
   buildReview();
   showScreen('review');
 }
 
 /* ═══════════════════════════════════════════════════
-   REVIEW SCREEN
+   REVIEW
 ═══════════════════════════════════════════════════ */
 function buildReview() {
   const results = state.roundResults;
@@ -951,7 +981,7 @@ function buildReview() {
   el.reviewTopic.textContent = state.currentTopic.title;
 
   let stars = '☆☆☆';
-  if (pct >= 0.9)      stars = '★★★';
+  if (pct >= 0.9) stars = '★★★';
   else if (pct >= 0.6) stars = '★★☆';
   else if (pct >= 0.3) stars = '★☆☆';
   el.reviewStars.textContent = stars;
@@ -961,15 +991,14 @@ function buildReview() {
   results.forEach(r => {
     const item = document.createElement('div');
     let cls, icon, resultTxt;
-
     if (r.missed) {
       cls = 'skip'; icon = '○'; resultTxt = 'Missed — drove past';
     } else if (r.correct) {
-      cls = 'hit';  icon = '✓'; resultTxt = 'Rammed correctly ✓';
+      cls = 'hit';  icon = '✓'; resultTxt = 'Correct car rammed ✓';
     } else {
-      cls = 'miss'; icon = '✕'; resultTxt = 'Wrong car rammed ✕';
+      cls = 'miss'; icon = '✕';
+      resultTxt = 'Wrong car rammed — "' + (r.rammedWord ? r.rammedWord.word : '?') + '" is a distractor';
     }
-
     const tagCls = r.word.correct ? 'fits' : 'distractor';
     const tagLbl = r.word.correct ? 'fits topic' : 'distractor';
 
@@ -977,15 +1006,13 @@ function buildReview() {
     item.innerHTML =
       '<div class="r-icon">' + icon + '</div>' +
       '<div>' +
-        '<div class="r-word">' +
-          r.word.word +
+        '<div class="r-word">' + r.word.word +
           '<span class="r-tag ' + tagCls + '">' + tagLbl + '</span>' +
           '<button class="speak-btn" title="Hear word">🔊</button>' +
         '</div>' +
         '<div class="r-explanation">' + r.word.explanation + '</div>' +
         '<div class="r-result">' + resultTxt + '</div>' +
       '</div>';
-
     item.querySelector('.speak-btn').addEventListener('click', () => speak(r.word.word));
     el.reviewList.appendChild(item);
   });
@@ -995,11 +1022,10 @@ function buildReview() {
   const notSeen = state.currentTopic.keywords.filter(w => !seen.has(w.word));
   if (notSeen.length) {
     const div = document.createElement('div');
-    div.style.cssText = 'font-size:11px;color:var(--dim);text-transform:uppercase;' +
-      'letter-spacing:1px;margin-top:8px;padding:6px 0;border-top:1px solid var(--border);';
+    div.style.cssText = 'font-size:10px;color:var(--dim);text-transform:uppercase;' +
+      'letter-spacing:1px;margin-top:6px;padding:5px 0;border-top:1px solid var(--border);';
     div.textContent = 'Other keywords for this topic';
     el.reviewList.appendChild(div);
-
     notSeen.forEach(w => {
       const item   = document.createElement('div');
       const tagCls = w.correct ? 'fits' : 'distractor';
@@ -1007,14 +1033,10 @@ function buildReview() {
       item.className = 'r-item skip';
       item.innerHTML =
         '<div class="r-icon">○</div>' +
-        '<div>' +
-          '<div class="r-word">' +
-            w.word +
-            '<span class="r-tag ' + tagCls + '">' + tagLbl + '</span>' +
-            '<button class="speak-btn" title="Hear word">🔊</button>' +
-          '</div>' +
-          '<div class="r-explanation">' + w.explanation + '</div>' +
-        '</div>';
+        '<div><div class="r-word">' + w.word +
+          '<span class="r-tag ' + tagCls + '">' + tagLbl + '</span>' +
+          '<button class="speak-btn" title="Hear word">🔊</button>' +
+        '</div><div class="r-explanation">' + w.explanation + '</div></div>';
       item.querySelector('.speak-btn').addEventListener('click', () => speak(w.word));
       el.reviewList.appendChild(item);
     });
@@ -1029,43 +1051,32 @@ el.btnNext.addEventListener('click', () => {
   loadTopic(next);
 });
 
-el.btnHome.addEventListener('click', () => {
-  updateStartScreen();
-  showScreen('start');
-});
+el.btnHome.addEventListener('click', () => { updateStartScreen(); showScreen('start'); });
 
-/* ═══════════════════════════════════════════════════
-   DONE SCREEN
-═══════════════════════════════════════════════════ */
+/* ── Done ── */
 function showDoneScreen() {
   const saved = loadProgress();
-  el.doneScore.textContent = 'Total score: ' + ((saved.totalScore || 0) + state.score);
+  el.doneScore.textContent = 'Total score: ' + ((saved.totalScore||0) + state.score);
   showScreen('done');
 }
-
 el.btnAgain.addEventListener('click', () => {
   resetProgress();
-  state.score  = 0;
-  state.streak = 0;
-  updateStartScreen();
-  showScreen('start');
+  state.score = 0; state.streak = 0;
+  updateStartScreen(); showScreen('start');
 });
 
-/* ═══════════════════════════════════════════════════
-   UTILITY
-═══════════════════════════════════════════════════ */
+/* ── Utility ── */
 function shuffleArray(arr) {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+  for (let i = arr.length-1; i > 0; i--) {
+    const j = Math.floor(Math.random()*(i+1));
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
 }
 
-/* ═══════════════════════════════════════════════════
-   INIT
-═══════════════════════════════════════════════════ */
+/* ── Init ── */
 function init() {
   resizeCanvas();
+  setupSteerButtons();
   updateStartScreen();
   showScreen('start');
 }

@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="screen-orientation" content="landscape" />
   <title>IELTS Road Blitz</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -19,55 +20,60 @@
 
       <div class="start-logo">
         <div class="logo-tag">IELTS</div>
-        <h1 class="logo-title">Road<br/>Blitz</h1>
+        <h1 class="logo-title">Road Blitz</h1>
         <p class="logo-sub">Part 2 Speaking — Vocabulary Driver</p>
       </div>
 
-      <div class="start-card">
+      <div class="start-columns">
 
-        <div class="setting-row">
-          <div class="setting-label">
-            <span class="setting-icon">⚡</span> Speed
+        <div class="start-card">
+
+          <div class="setting-row">
+            <div class="setting-label"><span class="setting-icon">⚡</span> Speed</div>
+            <div class="speed-btns">
+              <button class="spd active" data-speed="slow">Cruising</button>
+              <button class="spd" data-speed="medium">Highway</button>
+              <button class="spd" data-speed="fast">Redline</button>
+            </div>
           </div>
-          <div class="speed-btns">
-            <button class="spd active" data-speed="slow">Cruising</button>
-            <button class="spd" data-speed="medium">Highway</button>
-            <button class="spd" data-speed="fast">Redline</button>
+
+          <div class="setting-row">
+            <div class="setting-label"><span class="setting-icon">🗣️</span> Voice</div>
+            <div class="voice-row">
+              <select id="voice-select" class="voice-select"><option>Loading...</option></select>
+              <button id="voice-test-btn" class="voice-test-btn">▶</button>
+            </div>
           </div>
+
+          <div class="setting-row">
+            <div class="setting-label"><span class="setting-icon">📱</span> Tilt steering</div>
+            <button id="tilt-btn" class="tilt-btn">Enable tilt</button>
+          </div>
+
+          <div class="progress-row">
+            <div class="prog-pill">
+              <span class="prog-n" id="prog-done">0</span>
+              <span class="prog-l">/ 25 done</span>
+            </div>
+            <button class="reset-btn" id="reset-btn">Reset</button>
+          </div>
+
+          <button class="btn-go" id="btn-start">Start engine →</button>
+
         </div>
 
-        <div class="setting-row">
-          <div class="setting-label">
-            <span class="setting-icon">🗣️</span> Voice
+        <!-- High score panel -->
+        <div class="start-card hs-card">
+          <div class="setting-label" style="margin-bottom:10px">
+            <span class="setting-icon">🏆</span> High Scores
           </div>
-          <div class="voice-row">
-            <select id="voice-select" class="voice-select">
-              <option>Loading...</option>
-            </select>
-            <button id="voice-test-btn" class="voice-test-btn">▶</button>
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-label">
-            <span class="setting-icon">📱</span> Tilt steering
-          </div>
-          <button id="tilt-btn" class="tilt-btn">Enable tilt</button>
+          <ol class="hs-list" id="hs-list">
+            <li class="hs-empty">No scores yet — hit the road!</li>
+          </ol>
+          <button class="reset-btn" id="hs-clear-btn" style="margin-top:10px">Clear scores</button>
         </div>
 
       </div>
-
-      <div class="progress-row">
-        <div class="prog-pill">
-          <span class="prog-n" id="prog-done">0</span>
-          <span class="prog-l">/ 25 topics done</span>
-        </div>
-        <button class="reset-btn" id="reset-btn">Reset</button>
-      </div>
-
-      <button class="btn-go" id="btn-start">
-        Start engine →
-      </button>
 
     </div>
   </div>
@@ -93,9 +99,7 @@
         Study the topic. On the road, <strong>ram the car</strong> with the word that fits — avoid the distractor.
       </p>
 
-      <button class="btn-ready" id="btn-ready">
-        Hit the road →
-      </button>
+      <button class="btn-ready" id="btn-ready">Hit the road →</button>
 
     </div>
   </div>
@@ -127,7 +131,11 @@
 
     <canvas id="game-canvas"></canvas>
 
-    <div class="tilt-hint" id="tilt-hint">Tilt to steer</div>
+    <!-- On-screen steering buttons -->
+    <div class="steer-btns">
+      <button class="steer-btn" id="steer-left">◀</button>
+      <button class="steer-btn" id="steer-right">▶</button>
+    </div>
 
   </div>
 
