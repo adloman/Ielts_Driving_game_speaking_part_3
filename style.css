@@ -37,9 +37,14 @@ body {
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
   touch-action: none;
+  /* Safe area for iPhone notch / home bar */
+  padding-top:    env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left:   env(safe-area-inset-left);
+  padding-right:  env(safe-area-inset-right);
 }
 
-/* Force landscape via CSS rotation trick on portrait mobile */
+/* Force landscape via CSS rotation on portrait mobile */
 @media (orientation: portrait) and (max-width: 768px) {
   body {
     transform: rotate(90deg);
@@ -50,7 +55,15 @@ body {
     position: absolute;
     top: 100%;
     left: 0;
+    /* remove safe-area padding when rotated — it applies wrong axis */
+    padding: 0;
   }
+}
+
+/* Buttons must be touchable even though body has touch-action:none */
+button, select, input {
+  touch-action: auto;
+  pointer-events: all;
 }
 
 /* ── Screen system ── */
@@ -493,12 +506,14 @@ body {
   font-size: 26px;
   cursor: pointer;
   pointer-events: all;
+  touch-action: none;
   transition: background 0.1s, transform 0.1s;
   display: flex;
   align-items: center;
   justify-content: center;
   user-select: none;
   -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .steer-btn:active,
@@ -642,14 +657,14 @@ body {
   font-family: 'Barlow Condensed', sans-serif;
   font-size: 18px;
   font-weight: 700;
-  color: #4db8ff;
+  color: #f0c230;
   margin: 2px 0 1px;
   letter-spacing: 1px;
 }
 
 .r-example {
   font-size: 12px;
-  color: #ff4d4d;
+  color: #9ba3b8;
   font-style: italic;
   line-height: 1.5;
   margin-top: 2px;
@@ -661,7 +676,7 @@ body {
   background: none;
   border: none;
   cursor: pointer;
-  font-size: 18px;
+  font-size: 14px;
   padding: 1px 3px;
   border-radius: 4px;
   vertical-align: middle;
