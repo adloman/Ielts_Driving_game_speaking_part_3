@@ -393,6 +393,12 @@ function buildDots(doneCount) {
 }
 
 el.btnReady.addEventListener('click', () => {
+  // Unlock speech synthesis on desktop with a silent utterance
+  if (window.speechSynthesis) {
+    const unlock = new SpeechSynthesisUtterance('');
+    unlock.volume = 0;
+    window.speechSynthesis.speak(unlock);
+  }
   showScreen('game');
   startGame();
 });
@@ -968,6 +974,59 @@ function endRound() {
   showScreen('review');
 }
 
+/* ── Build a single review card (used by both results and not-seen) ── */
+function buildReviewItem(wordObj, result) {
+  const item = document.createElement('div');
+
+  // Determine status
+  let cls, icon, resultTxt;
+  if (!result) {
+    cls = 'skip'; icon = '○'; resultTxt = 'Not shown this round';
+  } else if (result.missed) {
+    cls = 'skip'; icon = '⏱'; resultTxt = 'Missed — drove past';
+  } else if (result.correct) {
+    cls = 'hit';  icon = '✓'; resultTxt = 'Correct car rammed ✓';
+  } else {
+    cls = 'miss'; icon = '✕';
+    resultTxt = 'Wrong — "' + (result.rammedWord ? result.rammedWord.word : '?') + '" is a distractor';
+  }
+
+  const tagCls = wordObj.correct ? 'fits' : 'distractor';
+  const tagLbl = wordObj.correct ? 'fits topic' : 'distractor';
+
+  item.className = 'r-item ' + cls;
+  item.innerHTML =
+    '<div class="r-icon">' + icon + '</div>' +
+    '<div class="r-body">' +
+      '<div class="r-word">' +
+        wordObj.word +
+        '<span class="r-tag ' + tagCls + '">' + tagLbl + '</span>' +
+        '<button class="speak-btn" title="Hear pronunciation">🔊</button>' +
+        (wordObj.chinese ? '<button class="cn-btn" title="Show Chinese">🇨🇳</button>' : '') +
+      '</div>' +
+      (wordObj.chinese ? '<div class="r-chinese" style="display:none">' + wordObj.chinese + '</div>' : '') +
+      '<div class="r-explanation">' + wordObj.explanation + '</div>' +
+      (wordObj.example  ? '<div class="r-example">"' + wordObj.example + '"</div>' : '') +
+      (result && !result.missed ? '<div class="r-result">' + resultTxt + '</div>' : '') +
+    '</div>';
+
+  // Speak button
+  item.querySelector('.speak-btn').addEventListener('click', () => speak(wordObj.word));
+
+  // Chinese toggle button
+  const cnBtn = item.querySelector('.cn-btn');
+  if (cnBtn) {
+    const cnDiv = item.querySelector('.r-chinese');
+    cnBtn.addEventListener('click', () => {
+      const visible = cnDiv.style.display !== 'none';
+      cnDiv.style.display = visible ? 'none' : 'block';
+      cnBtn.style.opacity = visible ? '0.5' : '1';
+    });
+  }
+
+  return item;
+}
+
 /* ═══════════════════════════════════════════════════
    REVIEW
 ═══════════════════════════════════════════════════ */
@@ -989,32 +1048,7 @@ function buildReview() {
   el.reviewList.innerHTML = '';
 
   results.forEach(r => {
-    const item = document.createElement('div');
-    let cls, icon, resultTxt;
-    if (r.missed) {
-      cls = 'skip'; icon = '○'; resultTxt = 'Missed — drove past';
-    } else if (r.correct) {
-      cls = 'hit';  icon = '✓'; resultTxt = 'Correct car rammed ✓';
-    } else {
-      cls = 'miss'; icon = '✕';
-      resultTxt = 'Wrong car rammed — "' + (r.rammedWord ? r.rammedWord.word : '?') + '" is a distractor';
-    }
-    const tagCls = r.word.correct ? 'fits' : 'distractor';
-    const tagLbl = r.word.correct ? 'fits topic' : 'distractor';
-
-    item.className = 'r-item ' + cls;
-    item.innerHTML =
-      '<div class="r-icon">' + icon + '</div>' +
-      '<div>' +
-        '<div class="r-word">' + r.word.word +
-          '<span class="r-tag ' + tagCls + '">' + tagLbl + '</span>' +
-          '<button class="speak-btn" title="Hear word">🔊</button>' +
-        '</div>' +
-        '<div class="r-explanation">' + r.word.explanation + '</div>' +
-        '<div class="r-result">' + resultTxt + '</div>' +
-      '</div>';
-    item.querySelector('.speak-btn').addEventListener('click', () => speak(r.word.word));
-    el.reviewList.appendChild(item);
+    el.reviewList.appendChild(buildReviewItem(r.word, r));
   });
 
   // Not-seen words
@@ -1027,18 +1061,7 @@ function buildReview() {
     div.textContent = 'Other keywords for this topic';
     el.reviewList.appendChild(div);
     notSeen.forEach(w => {
-      const item   = document.createElement('div');
-      const tagCls = w.correct ? 'fits' : 'distractor';
-      const tagLbl = w.correct ? 'fits topic' : 'distractor';
-      item.className = 'r-item skip';
-      item.innerHTML =
-        '<div class="r-icon">○</div>' +
-        '<div><div class="r-word">' + w.word +
-          '<span class="r-tag ' + tagCls + '">' + tagLbl + '</span>' +
-          '<button class="speak-btn" title="Hear word">🔊</button>' +
-        '</div><div class="r-explanation">' + w.explanation + '</div></div>';
-      item.querySelector('.speak-btn').addEventListener('click', () => speak(w.word));
-      el.reviewList.appendChild(item);
+      el.reviewList.appendChild(buildReviewItem(w, null));
     });
   }
 }
