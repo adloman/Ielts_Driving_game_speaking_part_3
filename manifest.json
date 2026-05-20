@@ -1,0 +1,10 @@
+{
+  "name": "IELTS Road Blitz",
+  "short_name": "Road Blitz",
+  "description": "IELTS Part 2 Vocabulary Driving Game",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#111318",
+  "theme_color": "#111318"
+}
