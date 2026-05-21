@@ -300,23 +300,88 @@ function enableTilt() {
   state.tiltEnabled = true;
   el.tiltBtn.textContent = '✓ Tilt enabled';
   el.tiltBtn.classList.add('enabled');
-  window.addEventListener('deviceorientation', e => { state.tiltGamma = e.gamma || 0; });
+
+  window.addEventListener('deviceorientation', e => {
+    // Get the actual physical rotation angle using modern API with fallback
+    // angle 0/180 = phone held portrait, 90/-90 = phone held landscape
+    let angle = 0;
+    if (screen.orientation && screen.orientation.angle !== undefined) {
+      angle = screen.orientation.angle;
+    } else if (window.orientation !== undefined) {
+      angle = window.orientation;
+    }
+
+    // Our CSS rotates portrait phones 90deg so the visual is landscape.
+    // That means the physical axes are rotated too — we must compensate.
+    if (angle === 0) {
+      // Portrait, CSS rotated — physical tilt left/right = beta, negate it
+      state.tiltGamma = -(e.beta || 0);
+    } else if (angle === 180) {
+      // Portrait upside down
+      state.tiltGamma = (e.beta || 0);
+    } else if (angle === 90) {
+      // Already landscape-right — gamma is left/right
+      state.tiltGamma = (e.gamma || 0);
+    } else if (angle === -90 || angle === 270) {
+      // Landscape-left — gamma inverted
+      state.tiltGamma = -(e.gamma || 0);
+    } else {
+      // Fallback
+      state.tiltGamma = (e.gamma || 0);
+    }
+  });
 }
 
 /* ── On-screen steering buttons ── */
 function setupSteerButtons() {
-  // Touch events
-  el.steerLeft.addEventListener('touchstart',  e => { e.preventDefault(); state.steerLeft = true;  el.steerLeft.classList.add('pressed'); }, { passive:false });
-  el.steerLeft.addEventListener('touchend',    e => { e.preventDefault(); state.steerLeft = false; el.steerLeft.classList.remove('pressed'); }, { passive:false });
-  el.steerRight.addEventListener('touchstart', e => { e.preventDefault(); state.steerRight = true;  el.steerRight.classList.add('pressed'); }, { passive:false });
-  el.steerRight.addEventListener('touchend',   e => { e.preventDefault(); state.steerRight = false; el.steerRight.classList.remove('pressed'); }, { passive:false });
-  // Mouse events (desktop)
-  el.steerLeft.addEventListener('mousedown',  () => { state.steerLeft = true;  el.steerLeft.classList.add('pressed'); });
-  el.steerLeft.addEventListener('mouseup',    () => { state.steerLeft = false; el.steerLeft.classList.remove('pressed'); });
-  el.steerLeft.addEventListener('mouseleave', () => { state.steerLeft = false; el.steerLeft.classList.remove('pressed'); });
-  el.steerRight.addEventListener('mousedown',  () => { state.steerRight = true;  el.steerRight.classList.add('pressed'); });
-  el.steerRight.addEventListener('mouseup',    () => { state.steerRight = false; el.steerRight.classList.remove('pressed'); });
-  el.steerRight.addEventListener('mouseleave', () => { state.steerRight = false; el.steerRight.classList.remove('pressed'); });
+  // Visual buttons
+  function pressVisual(side, on) {
+    el['steer' + side].classList.toggle('pressed', on);
+  }
+
+  ['Left','Right'].forEach(side => {
+    const btn = el['steer' + side];
+    btn.addEventListener('touchstart',  e => { e.preventDefault(); e.stopPropagation(); state['steer'+side] = true;  pressVisual(side, true);  }, { passive:false });
+    btn.addEventListener('touchend',    e => { e.preventDefault(); e.stopPropagation(); state['steer'+side] = false; pressVisual(side, false); }, { passive:false });
+    btn.addEventListener('touchcancel', e => { e.preventDefault(); e.stopPropagation(); state['steer'+side] = false; pressVisual(side, false); }, { passive:false });
+    btn.addEventListener('mousedown',  () => { state['steer'+side] = true;  pressVisual(side, true);  });
+    btn.addEventListener('mouseup',    () => { state['steer'+side] = false; pressVisual(side, false); });
+    btn.addEventListener('mouseleave', () => { state['steer'+side] = false; pressVisual(side, false); });
+  });
+
+  // ALSO handle touches on the canvas itself — split screen left/right
+  // This is the reliable fallback since the canvas covers everything
+  canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    Array.from(e.changedTouches).forEach(t => {
+      if (t.clientX < W / 2) { state.steerLeft  = true;  pressVisual('Left',  true);  }
+      else                   { state.steerRight = true;  pressVisual('Right', true);  }
+    });
+  }, { passive: false });
+
+  canvas.addEventListener('touchend', e => {
+    e.preventDefault();
+    // If no touches left, release both
+    if (e.touches.length === 0) {
+      state.steerLeft  = false; pressVisual('Left',  false);
+      state.steerRight = false; pressVisual('Right', false);
+    } else {
+      // Re-evaluate which sides are still pressed
+      let hasLeft = false, hasRight = false;
+      Array.from(e.touches).forEach(t => {
+        if (t.clientX < W / 2) hasLeft  = true;
+        else                   hasRight = true;
+      });
+      state.steerLeft  = hasLeft;  pressVisual('Left',  hasLeft);
+      state.steerRight = hasRight; pressVisual('Right', hasRight);
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('touchcancel', e => {
+    e.preventDefault();
+    state.steerLeft  = false; pressVisual('Left',  false);
+    state.steerRight = false; pressVisual('Right', false);
+  }, { passive: false });
 }
 
 /* ── Keyboard ── */
@@ -393,6 +458,10 @@ function buildDots(doneCount) {
 }
 
 el.btnReady.addEventListener('click', () => {
+  // Try to lock orientation to landscape (works in Chrome Android + PWA mode)
+  if (screen.orientation && screen.orientation.lock) {
+    screen.orientation.lock('landscape').catch(() => {});
+  }
   // Unlock speech synthesis on desktop with a silent utterance
   if (window.speechSynthesis) {
     const unlock = new SpeechSynthesisUtterance('');
@@ -516,6 +585,19 @@ function startGame() {
   initRoad();
   updateHUD();
   startEngine();
+
+  // Show tap zone hint briefly
+  let tapHint = document.querySelector('.tap-zones');
+  if (!tapHint) {
+    tapHint = document.createElement('div');
+    tapHint.className = 'tap-zones';
+    tapHint.innerHTML =
+      '<div class="tap-zone-left"><span class="tap-zone-label">◀ tap left</span></div>' +
+      '<div class="tap-zone-right"><span class="tap-zone-label">tap right ▶</span></div>';
+    document.getElementById('screen-game').appendChild(tapHint);
+  }
+  tapHint.classList.add('visible');
+  setTimeout(() => tapHint.classList.remove('visible'), 2000);
   lastTime = performance.now();
   state.animFrame = requestAnimationFrame(gameLoop);
 }
@@ -890,13 +972,13 @@ function drawCar(car, _isPlayer) {
   ctx2d.fillRect(-hw+3, hh-8, 9, 5);
   ctx2d.fillRect( hw-12,hh-8, 9, 5);
 
-  // ── Word label — LARGER font ──
-  const word      = car.wordObj.word;
-  const maxWidth  = car.w * 1.6;  // allow label wider than car
-  // Dynamic font size: start large and scale down if needed
-  let fontSize = Math.min(car.w * 0.52, 22);
+  // ── Word label — floats ABOVE the car, large and readable ──
+  const word     = car.wordObj.word;
+  // Font size based on screen width for readability at all speeds
+  const maxWidth = Math.min(roadW * 0.46, 180);
+  let fontSize   = Math.min(W * 0.038, 36);  // much larger base size
   ctx2d.font = '900 ' + fontSize + 'px "Barlow Condensed", sans-serif';
-  while (ctx2d.measureText(word).width > maxWidth - 10 && fontSize > 11) {
+  while (ctx2d.measureText(word).width > maxWidth - 12 && fontSize > 14) {
     fontSize -= 1;
     ctx2d.font = '900 ' + fontSize + 'px "Barlow Condensed", sans-serif';
   }
@@ -904,20 +986,27 @@ function drawCar(car, _isPlayer) {
   ctx2d.textAlign    = 'center';
   ctx2d.textBaseline = 'middle';
   const tw  = ctx2d.measureText(word).width;
-  const pad = 8;
+  const pad = 10;
   const lw  = tw + pad * 2;
-  const lh  = fontSize + 10;
-  const ly  = -hh * 0.3;
+  const lh  = fontSize + 12;
+  // Float ABOVE the car top
+  const ly  = -hh - lh / 2 - 6;
 
-  // Label pill background
-  ctx2d.fillStyle = 'rgba(0,0,0,0.62)';
-  rrect(ctx2d, -lw/2, ly - lh/2, lw, lh, 5);
+  // Bright pill background so it's readable at speed
+  ctx2d.fillStyle = 'rgba(0,0,0,0.82)';
+  rrect(ctx2d, -lw/2, ly - lh/2, lw, lh, 7);
   ctx2d.fill();
 
+  // Yellow border for extra pop
+  ctx2d.strokeStyle = 'rgba(240,194,48,0.7)';
+  ctx2d.lineWidth   = 2;
+  rrect(ctx2d, -lw/2, ly - lh/2, lw, lh, 7);
+  ctx2d.stroke();
+
   // Label text
-  ctx2d.fillStyle    = '#ffffff';
-  ctx2d.strokeStyle  = 'rgba(0,0,0,0.5)';
-  ctx2d.lineWidth    = 2.5;
+  ctx2d.fillStyle   = '#ffffff';
+  ctx2d.lineWidth   = 3;
+  ctx2d.strokeStyle = 'rgba(0,0,0,0.8)';
   ctx2d.strokeText(word, 0, ly);
   ctx2d.fillText(word, 0, ly);
 

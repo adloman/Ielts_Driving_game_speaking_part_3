@@ -687,3 +687,34 @@ button, select, input {
 }
 .cn-btn:hover  { opacity: 1; transform: scale(1.15); }
 .cn-btn:active { transform: scale(0.9); }
+
+/* ── Tap zone hint (shown briefly at game start) ── */
+.tap-zones {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  pointer-events: none;
+  z-index: 5;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+}
+.tap-zones.visible { opacity: 1; }
+
+.tap-zone-left, .tap-zone-right {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 28px;
+}
+
+.tap-zone-left  { border-right: 1px solid rgba(255,255,255,0.05); }
+
+.tap-zone-label {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.2);
+}
