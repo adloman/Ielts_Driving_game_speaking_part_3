@@ -44,27 +44,45 @@ body {
   padding-right:  env(safe-area-inset-right);
 }
 
-/* Force landscape via CSS rotation on portrait mobile */
-@media (orientation: portrait) and (max-width: 768px) {
-  body {
-    transform: rotate(90deg);
-    transform-origin: left top;
-    width: 100vh;
-    height: 100vw;
-    overflow: hidden;
-    position: absolute;
-    top: 100%;
-    left: 0;
-    /* remove safe-area padding when rotated — it applies wrong axis */
-    padding: 0;
-  }
+/* ── Rotate prompt — shown in portrait on mobile ── */
+.rotate-prompt {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  background: var(--bg);
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  text-align: center;
+  padding: 40px;
 }
 
-/* Buttons must be touchable even though body has touch-action:none */
-button, select, input {
-  touch-action: auto;
-  pointer-events: all;
+@media (orientation: portrait) and (max-width: 768px) {
+  .rotate-prompt { display: flex; }
+  /* Hide everything else in portrait */
+  .screen { display: none !important; }
 }
+
+.rotate-icon {
+  font-size: 64px;
+  animation: rotateHint 1.5s ease-in-out infinite;
+}
+@keyframes rotateHint {
+  0%,100% { transform: rotate(0deg);   }
+  50%      { transform: rotate(90deg);  }
+}
+
+.rotate-title {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 900;
+  font-size: 28px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--white);
+}
+.rotate-sub { font-size: 14px; color: var(--muted); }
 
 /* ── Screen system ── */
 .screen {
@@ -75,6 +93,12 @@ button, select, input {
   padding: 16px 20px 24px;
 }
 .screen.active { display: flex; flex-direction: column; }
+
+/* Buttons/inputs must be tappable even though body has touch-action:none */
+button, select, input {
+  touch-action: auto;
+  pointer-events: all;
+}
 
 /* ═══════════════════════════════════════════════
    SCREEN 1 — START

@@ -302,33 +302,20 @@ function enableTilt() {
   el.tiltBtn.classList.add('enabled');
 
   window.addEventListener('deviceorientation', e => {
-    // Get the actual physical rotation angle using modern API with fallback
-    // angle 0/180 = phone held portrait, 90/-90 = phone held landscape
+    // No CSS rotation hack anymore — phone must be landscape.
+    // In landscape, gamma = left/right tilt. Simple.
+    // screen.orientation.angle 90 = landscape-right (normal hold)
+    // screen.orientation.angle 270 = landscape-left (upside down)
     let angle = 0;
     if (screen.orientation && screen.orientation.angle !== undefined) {
       angle = screen.orientation.angle;
     } else if (window.orientation !== undefined) {
       angle = window.orientation;
     }
-
-    // Our CSS rotates portrait phones 90deg so the visual is landscape.
-    // That means the physical axes are rotated too — we must compensate.
-    if (angle === 0) {
-      // Portrait, CSS rotated — physical tilt left/right = beta, negate it
-      state.tiltGamma = -(e.beta || 0);
-    } else if (angle === 180) {
-      // Portrait upside down
-      state.tiltGamma = (e.beta || 0);
-    } else if (angle === 90) {
-      // Already landscape-right — gamma is left/right
-      state.tiltGamma = (e.gamma || 0);
-    } else if (angle === -90 || angle === 270) {
-      // Landscape-left — gamma inverted
-      state.tiltGamma = -(e.gamma || 0);
-    } else {
-      // Fallback
-      state.tiltGamma = (e.gamma || 0);
-    }
+    // landscape-left (270/-90) inverts gamma
+    state.tiltGamma = (angle === 270 || angle === -90)
+      ? -(e.gamma || 0)
+      :  (e.gamma || 0);
   });
 }
 
